@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 
 """uartHandler.py: Simple non blocking uart handler module .It assumes a newline
-return protocol that separates ascii lines with \n.."""
+return protocol that separates ascii lines with \n. Raises ValueError if
+Serial fails."""
 
 __author__  = "Minos Galanakis"
 __license__ = "LGPL"
@@ -32,9 +33,12 @@ class UartHandler():
         self.stop_threads = False
         self.rx_cb = rx_callback
 
-        #Insantiate the UART
-        self.uart = serial.Serial(port, baud)
-
+        #Instantiate the UART
+        try:
+            self.uart = serial.Serial(port, baud)
+        except serial.SerialException:
+            print "** Failed to initialize serial, check your port.** "
+            raise ValueError
         if self.use_queues:
             # Remove size limit ofr memory limitted applications
             # or if the queues are not emptied using qeueu.get()
@@ -48,31 +52,41 @@ class UartHandler():
 
             #Continuously poll unless the flag terminates the thread
             while True:
-                #This is required to reduce cpu load of program.Adjust in init
-                time.sleep(self.background_poll_delay)
-                if self.stop_threads:
-                    print "\n ** Shutting Down RX UART polling Thread **"
+                try:
+                    #This is required to reduce cpu load of program.Adjust in init
+                    time.sleep(self.background_poll_delay)
+                    if self.stop_threads:
+                        print "\n ** Shutting Down RX UART polling Thread **"
+                        return
+                    #If there is something in the line remove the last char "\n"
+                    #and pass it using the callback 
+                    elif self.uart.inWaiting():
+                        uart_rx_data = self.uart.readline()[:-1]
+                        (lambda x: rx_cb(x))(uart_rx_data)
+
+                except (serial.SerialException,IOError):
+                    print "** Serial Failed Check your connection. ** "
                     return
-                #If there is something in the line remove the last char "\n"
-                #and pass it using the callback 
-                elif self.uart.inWaiting():
-                    uart_rx_data = self.uart.readline()[:-1]
-                    (lambda x: rx_cb(x))(uart_rx_data)
 
         def tx_uart_poll():
 
             while True:      
-                time.sleep(self.background_poll_delay)
-                if self.stop_threads:
-                    print "\n ** Shutting Down TX UART polling Thread **"
+                try:
+                    time.sleep(self.background_poll_delay)
+                    if self.stop_threads:
+                        print "\n ** Shutting Down TX UART polling Thread **"
+                        return
+                    #Qusize may not be accurate enough if there is something written
+                    # on the buffer but the routine will poll again
+                    elif self.tx_queue.qsize() > 0:
+                        dt = self.tx_queue.get()
+                        # Send the data dding the new line trail
+                        self.raw_uart_send(dt)
+                        self.tx_queue.task_done()
+                except (serial.SerialException,IOError):
+                    print "** Serial Failed Check your connection. ** "
                     return
-                #Qusize may not be accurate enough if there is something written
-                # on the buffer but the routine will poll again
-                elif self.tx_queue.qsize() > 0:
-                    dt = self.tx_queue.get()
-                    # Send the data dding the new line trail
-                    self.raw_uart_send(dt)
-                    self.tx_queue.task_done()
+
 
         # covert to a thread and start it
         if not self.use_queues:
